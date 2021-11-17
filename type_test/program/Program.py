@@ -1,6 +1,7 @@
 import curses
 import re
 import threading
+from statistics import mean
 
 from type_test.quotes.Quotes import Quotes
 from type_test.timer import Timer
@@ -55,6 +56,11 @@ class Program:
 		self.stats = (0, 0)  # wps, cps
 		self.time = (0, 0)  # secs, millis
 		self.lock = threading.Lock()
+		# List of previous attempt wpm's
+		self.previous_attempts = []
+		# Save value of previous attempts average so that we don't have
+		# to calculate every re-render
+		self.avg_cached = 0
 
 	def restart(self):
 		self.stdscr.clear()
@@ -101,10 +107,12 @@ class Program:
 	def render_header(self):
 		with self.lock:
 			seconds, millis = self.time
-			wpm, cps = self.get_stats()
+			wpm, cps, avg = self.get_stats()
+			self.stdscr.move(*HEADER_POS)
+			self.stdscr.clrtoeol()
 			# Draw background for the header
 			self.stdscr.chgat(*HEADER_POS, self.size[1], self.colors.HEADER)
-			header_string = "{:.2f} wpm {:.2f} cps {}.{:02d}s".format(wpm, cps, seconds, millis)
+			header_string = "{:.2f} wpm {:.2f} cps {}.{:02d}s {:.2f} avg wpm".format(wpm, cps, seconds, millis, avg)
 			# Draw current data
 			self.stdscr.addstr(*HEADER_POS, header_string, self.colors.HEADER)
 			# Return the cursor to its original position
@@ -150,9 +158,8 @@ class Program:
 
 				cur_y, cur_x = inc_row_col(cur_y, cur_x)
 
-			self.stdscr.addstr(TEXT_POS[0] + title_y + 1, TEXT_POS[1],
-			                   "{}, {}".format(self.selected_quote.author, self.selected_quote.title),
-			                   self.colors.TITLE)
+			title = "{}, {}".format(self.selected_quote.author, self.selected_quote.title)
+			self.stdscr.addstr(TEXT_POS[0] + title_y + 1, TEXT_POS[1], title, self.colors.TITLE)
 
 			# After drawing on the screen we need to set cur_pos to allow
 			# update_cursor to move it to the valid position
@@ -164,8 +171,10 @@ class Program:
 		if c == curses.KEY_BACKSPACE:
 			if len(self.typed) > 0:
 				self.typed = self.typed[:-1]
-		elif c == curses.KEY_RESIZE:
-			self.handle_resize()
+		elif c == 4:  # CTRL+D
+			self.restart()
+		elif c == curses.KEY_EXIT:
+			self.restart()
 		# FIXME: can this be better?
 		elif 32 <= c <= 126:
 			self.typed += chr(c)
@@ -176,8 +185,8 @@ class Program:
 	def get_stats(self):
 		secs = self.time[0]
 		if secs > 0:
-			return self.stats[0] / secs * 60, self.stats[1] / secs
-		return 0, 0
+			return self.stats[0] / secs * 60, self.stats[1] / secs, self.avg_cached
+		return 0, 0, self.avg_cached
 
 	# Instead of calculating stats every time we re-render the header
 	# we update them only when a new character is typed which should
@@ -190,12 +199,16 @@ class Program:
 
 	def check_win(self):
 		if self.selected_quote.text == self.typed:
-			# TODO: handle win
 			self.started = False
 			self.stop_timer()
-			# wait for any key then restart
+			self.previous_attempts.append(self.get_stats()[0])
+			self.avg_cached = mean(self.previous_attempts)
+			# Re-render header to show new updated average data
+			self.render_header()
+			# Wait for any key then restart
 			self.stdscr.getch()
-			# don't forget to call restart
+			# Don't forget to call restart
+			self.previous_attempts.append(self.get_stats()[0])
 			self.restart()
 
 	def handle_resize(self):
