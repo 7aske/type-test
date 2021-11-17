@@ -2,7 +2,7 @@ import curses
 import re
 import threading
 
-from type_test.quotes import Quotes
+from type_test.quotes.Quotes import Quotes
 from type_test.timer import Timer
 
 TEXT_POS = (2, 0)
@@ -14,23 +14,28 @@ class Colors:
 	Class representing valid color pairs for use in
 	"""
 	# @formatter:off
-	__COLOR_RED    = 71
-	__COLOR_GREEN  = 72
-	__COLOR_ERROR  = 73
-	__COLOR_HEADER = 74
+	__PAIR_RED     = 71
+	__PAIR_GREEN   = 72
+	__PAIR_ERROR   = 73
+	__PAIR_HEADER  = 74
+	__PAIR_TITLE   = 75
+	__COLOR_TITLE  = 105
 	# @formatter:on
 
 	# Must not be instantiated before setting up curses
 	def __init__(self) -> None:
 		# @formatter:off
-		curses.init_pair(self.__COLOR_RED,   curses.COLOR_RED,    curses.COLOR_BLACK)
-		curses.init_pair(self.__COLOR_GREEN, curses.COLOR_GREEN,  curses.COLOR_BLACK)
-		curses.init_pair(self.__COLOR_ERROR, curses.COLOR_BLACK,  curses.COLOR_RED)
-		curses.init_pair(self.__COLOR_HEADER, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
-		self.RED    = curses.color_pair(self.__COLOR_RED)
-		self.GREEN  = curses.color_pair(self.__COLOR_GREEN)
-		self.ERROR  = curses.color_pair(self.__COLOR_ERROR)
-		self.HEADER = curses.color_pair(self.__COLOR_HEADER)
+		curses.init_color(self.__COLOR_TITLE, 432, 488, 548)
+		curses.init_pair(self.__PAIR_RED,    curses.COLOR_RED,   curses.COLOR_BLACK)
+		curses.init_pair(self.__PAIR_GREEN,  curses.COLOR_GREEN, curses.COLOR_BLACK)
+		curses.init_pair(self.__PAIR_ERROR,  curses.COLOR_BLACK, curses.COLOR_RED)
+		curses.init_pair(self.__PAIR_HEADER, curses.COLOR_BLACK, curses.COLOR_MAGENTA)
+		curses.init_pair(self.__PAIR_TITLE,  self.__COLOR_TITLE, curses.COLOR_BLACK)
+		self.RED    = curses.color_pair(self.__PAIR_RED)
+		self.GREEN  = curses.color_pair(self.__PAIR_GREEN)
+		self.ERROR  = curses.color_pair(self.__PAIR_ERROR)
+		self.HEADER = curses.color_pair(self.__PAIR_HEADER)
+		self.TITLE  = curses.color_pair(self.__PAIR_TITLE)
 		# @formatter:on
 
 
@@ -38,8 +43,9 @@ class Program:
 	def __init__(self, stdscr) -> None:
 		self.stdscr = stdscr
 		self.colors = Colors()
-		self.quotes = Quotes()
+		self.quotes = Quotes.load()
 		self.running = False
+		self.started = False
 		self.typed = ""
 		self.selected_quote = None
 		# Cursor position
@@ -51,9 +57,28 @@ class Program:
 		self.lock = threading.Lock()
 
 	def restart(self):
-		self.running = True
+		self.stdscr.clear()
 		self.typed = ""
 		self.selected_quote = self.quotes.random()
+
+		# we manually call one render so that the user
+		# can see which quote he got
+		self.render_header()
+		self.render()
+
+		while not self.started:
+			c = self.stdscr.getch()
+			# TODO: duplicate code
+			if 32 <= c <= 126:
+				self.typed += chr(c)
+				self.started = True
+			# FIXME: duplicate code:
+			elif c == curses.KEY_RESIZE:
+				self.handle_resize()
+			elif c == curses.KEY_LEFT or c == curses.KEY_RIGHT:
+				self.restart()
+
+		self.running = True
 		self.start_timer()
 
 	def run(self):
@@ -86,13 +111,33 @@ class Program:
 			self.update_cursor()
 
 	def render(self):
+		def inc_row_col(y, x):
+			# This is done to prevent us from running off of the screen.
+			if x == self.size[1] - 1:
+				y += 1
+				x = TEXT_POS[1]  # in case we have some padding
+			else:
+				x += 1
+			return y, x
+
 		with self.lock:
 			# Pointers used to track current cursor position to be written on the screen
 			cur_y, cur_x = TEXT_POS
+			# We first manually print the text so that we can find the 'y' position for the title.
+			# Title should be rendered below the text
+			for selected in self.selected_quote.text:
+				self.stdscr.addch(cur_y, cur_x, ord(selected))
+
+				cur_y, cur_x = inc_row_col(cur_y, cur_x)
+
 			errored = False
 			color = self.colors.GREEN
-			self.stdscr.addstr(*TEXT_POS, self.selected_quote)
-			for typed, selected in zip(self.typed, self.selected_quote):
+			# Save 'y' for printing title
+			title_y = cur_y
+			# Reset the position so that we can print the user typed text
+			cur_y, cur_x = TEXT_POS
+
+			for typed, selected in zip(self.typed, self.selected_quote.text):
 				valid = typed == selected
 				if not valid:
 					# We don't reset errored flag unless we re-render the whole text in
@@ -103,12 +148,11 @@ class Program:
 					color = self.colors.ERROR
 				self.stdscr.addch(cur_y, cur_x, ord(selected), color)
 
-				# This is done to prevent us from running off of the screen.
-				if cur_x == self.size[1] - 1:
-					cur_y += 1
-					cur_x = TEXT_POS[1]  # in case we have some padding
-				else:
-					cur_x += 1
+				cur_y, cur_x = inc_row_col(cur_y, cur_x)
+
+			self.stdscr.addstr(TEXT_POS[0] + title_y + 1, TEXT_POS[1],
+			                   "{}, {}".format(self.selected_quote.author, self.selected_quote.title),
+			                   self.colors.TITLE)
 
 			# After drawing on the screen we need to set cur_pos to allow
 			# update_cursor to move it to the valid position
@@ -118,9 +162,10 @@ class Program:
 	def read_input(self):
 		c = self.stdscr.getch()
 		if c == curses.KEY_BACKSPACE:
-			self.typed = self.typed[:-1]
+			if len(self.typed) > 0:
+				self.typed = self.typed[:-1]
 		elif c == curses.KEY_RESIZE:
-			self.update_size()
+			self.handle_resize()
 		# FIXME: can this be better?
 		elif 32 <= c <= 126:
 			self.typed += chr(c)
@@ -144,12 +189,22 @@ class Program:
 		self.stats = (words, len(self.typed))
 
 	def check_win(self):
-		if self.selected_quote == self.typed:
+		if self.selected_quote.text == self.typed:
 			# TODO: handle win
+			self.started = False
 			self.stop_timer()
+			# wait for any key then restart
+			self.stdscr.getch()
+			# don't forget to call restart
+			self.restart()
 
-	def update_size(self):
+	def handle_resize(self):
 		self.size = self.stdscr.getmaxyx()
+		# Re-render after resizing
+		self.stdscr.clear()
+		self.render_header()
+		self.render()
+		self.refresh_screen()
 
 	# Method called by the timer thread used for re-rendering
 	# the header

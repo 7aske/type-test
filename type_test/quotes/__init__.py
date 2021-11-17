@@ -1,1 +1,1 @@
-from .Quotes import Quotes
+from .Quotes import Quote
