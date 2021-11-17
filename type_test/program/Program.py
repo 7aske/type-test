@@ -1,5 +1,5 @@
 import curses
-from time import sleep
+import re
 import threading
 
 from type_test.quotes import Quotes
@@ -46,6 +46,8 @@ class Program:
 		self.cur_pos = TEXT_POS
 		self.size = self.stdscr.getmaxyx()
 		self.timer = None
+		# wps, cps, typed
+		self.stats = (0, 0, 0)
 		self.time = (0, 0)
 		self.lock = threading.Lock()
 
@@ -73,9 +75,10 @@ class Program:
 	def render_header(self):
 		with self.lock:
 			seconds, millis = self.time
+			wpm, cps, cnt = self.get_stats()
 			# Draw background for the header
 			self.stdscr.chgat(*HEADER_POS, self.size[1], self.colors.HEADER)
-			header_string = "{} wpm {} cps {}.{:02d}s {}% acc".format(0, 0, seconds, millis, 0)
+			header_string = "{} wpm {} cps {}.{:02d}s {}% acc".format(wpm, cps, seconds, millis, cnt)
 			# Draw current data
 			self.stdscr.addstr(*HEADER_POS, header_string, self.colors.HEADER)
 			# Return the cursor to its original position
@@ -119,6 +122,18 @@ class Program:
 		# FIXME: can this be better?
 		elif 32 <= c <= 126:
 			self.typed += chr(c)
+		self.update_stats()
+
+	def update_stats(self):
+		self.stats[2] += 1
+		words = len(re.split(r"\s+", self.typed))
+		self.stats = (words, len(self.typed), self.stats[2])
+
+	def get_stats(self):
+		secs = self.time[0]
+		if secs > 0:
+			return self.stats[0] / secs, self.stats[1] / secs, self.stats[2]
+		return 0, 0, 0
 
 	def check_win(self):
 		if self.selected_quote == self.typed:
