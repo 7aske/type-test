@@ -2,6 +2,14 @@ import random
 import json
 import gzip
 from os import getenv
+from pathlib import Path
+import pkg_resources
+
+ROOT = Path(__file__).parent
+
+
+def get_data_path(path):
+	return str(ROOT.joinpath("data").joinpath(path))
 
 
 class Quote:
@@ -14,8 +22,7 @@ class Quote:
 
 
 class Quotes:
-	# FIXME: probably won't work once the package is built
-	__database_filename = "type_test/data/examples.json.gz"
+	__database_filename = pkg_resources.resource_filename("type_test", "data/examples.json.gz")
 
 	def __init__(self, quotes) -> None:
 		super().__init__()
