@@ -46,9 +46,8 @@ class Program:
 		self.cur_pos = TEXT_POS
 		self.size = self.stdscr.getmaxyx()
 		self.timer = None
-		# wps, cps, typed
-		self.stats = (0, 0, 0)
-		self.time = (0, 0)
+		self.stats = (0, 0)  # wps, cps
+		self.time = (0, 0)  # secs, millis
 		self.lock = threading.Lock()
 
 	def restart(self):
@@ -61,24 +60,26 @@ class Program:
 		self.restart()
 		self.loop()
 
+	# Main loop
 	def loop(self):
 		while self.running:
 			self.render()
-			self.update_cursor()
 			self.check_win()
 			self.refresh_screen()
 			self.read_input()
 
+	# We call this after rendering the part of the screen which
+	# is not the position of the next character to be typed by the user.
 	def update_cursor(self):
 		self.stdscr.move(*self.cur_pos)
 
 	def render_header(self):
 		with self.lock:
 			seconds, millis = self.time
-			wpm, cps, cnt = self.get_stats()
+			wpm, cps = self.get_stats()
 			# Draw background for the header
 			self.stdscr.chgat(*HEADER_POS, self.size[1], self.colors.HEADER)
-			header_string = "{} wpm {} cps {}.{:02d}s {}% acc".format(wpm, cps, seconds, millis, cnt)
+			header_string = "{:.2f} wpm {:.2f} cps {}.{:02d}s".format(wpm, cps, seconds, millis)
 			# Draw current data
 			self.stdscr.addstr(*HEADER_POS, header_string, self.colors.HEADER)
 			# Return the cursor to its original position
@@ -112,6 +113,7 @@ class Program:
 			# After drawing on the screen we need to set cur_pos to allow
 			# update_cursor to move it to the valid position
 			self.cur_pos = (cur_y, cur_x)
+			self.update_cursor()
 
 	def read_input(self):
 		c = self.stdscr.getch()
@@ -122,18 +124,24 @@ class Program:
 		# FIXME: can this be better?
 		elif 32 <= c <= 126:
 			self.typed += chr(c)
+
 		self.update_stats()
 
-	def update_stats(self):
-		self.stats[2] += 1
-		words = len(re.split(r"\s+", self.typed))
-		self.stats = (words, len(self.typed), self.stats[2])
-
+	# Calculate typing stats. We should call this when we want up-to-date data
 	def get_stats(self):
 		secs = self.time[0]
 		if secs > 0:
-			return self.stats[0] / secs, self.stats[1] / secs, self.stats[2]
-		return 0, 0, 0
+			return self.stats[0] / secs * 60, self.stats[1] / secs
+		return 0, 0
+
+	# Instead of calculating stats every time we re-render the header
+	# we update them only when a new character is typed which should
+	# lead to better performance. Need to keep in mind that we cannot calculate
+	# actual values here because typing occurs way less often than rendering
+	# the header.
+	def update_stats(self):
+		words = len(re.split(r"\s+", self.typed))
+		self.stats = (words, len(self.typed))
 
 	def check_win(self):
 		if self.selected_quote == self.typed:
@@ -143,6 +151,8 @@ class Program:
 	def update_size(self):
 		self.size = self.stdscr.getmaxyx()
 
+	# Method called by the timer thread used for re-rendering
+	# the header
 	def __timer_callback(self):
 		# We avoid initializing the values to 0
 		# in order to allow showing previous time after
@@ -157,6 +167,7 @@ class Program:
 		self.render_header()
 		self.refresh_screen()
 
+	# Stop the timer by joining its thread
 	def stop_timer(self):
 		if self.timer is not None:
 			self.timer.join()
@@ -167,9 +178,10 @@ class Program:
 		self.timer = Timer(callback=self.__timer_callback)
 		self.timer.start()
 
+	# Stop timer and the main loop
 	def stop(self):
-		if self.timer is not None:
-			self.timer.join()
+		self.running = False
+		self.stop_timer()
 
 	def refresh_screen(self):
 		with self.lock:
